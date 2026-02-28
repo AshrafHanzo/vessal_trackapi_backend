@@ -165,7 +165,7 @@ def process_job(job_data):
     result_data = data.get("data", data)
     cfs_in = result_data.get("cfs_in_time")
     cfs_out = result_data.get("cfs_out_time")
-    scraped_code = result_data.get("cfs_code")
+    scraped_code = result_data.get("cfs_code")  # "CFS Name" from DPWorld (used as code)
 
     # Resolve CFS code to name via fuzzy lookup
     matched_code, matched_name = resolve_cfs_name(scraped_code)

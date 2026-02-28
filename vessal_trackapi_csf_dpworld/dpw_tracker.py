@@ -112,14 +112,19 @@ def track_dpw(container_no):
             if not in_time_raw: in_time_raw = get_text_for_label(soup, "In-Time")
             out_time_raw = get_text_for_label(soup, "Out Time")
             scan_mark_raw = get_text_for_label(soup, "Scan Mark")
+            cfs_name_raw = get_text_for_label(soup, "CFS Name")
             
             # Process Fields
             scan_mark_val = None
             if scan_mark_raw and len(scan_mark_raw.strip()) > 0:
                 scan_mark_val = scan_mark_raw.strip()
             
+            # DPWorld's "CFS Name" field IS the CFS code for the portal
+            # Use it as cfs_code, fallback to Destination Code
+            cfs_code_val = (cfs_name_raw.strip() if cfs_name_raw else None) or (dest_code_raw if dest_code_raw else None)
+            
             data = {
-                "cfs_code": dest_code_raw if dest_code_raw else None,
+                "cfs_code": cfs_code_val,
                 "cfs_in_time": format_date_ampm(in_time_raw),
                 "cfs_out_time": format_date_ampm(out_time_raw),
                 "scan_mark": scan_mark_val
