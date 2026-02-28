@@ -1,0 +1,37 @@
+# Virtual Environment
+venv/
+venv_*/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Images
+**/images/
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.svg
+*.webp
+
+# Data and Logs
+json.data/
+*.json
+*.log
+*.txt
+*.html
+*.xlsx
+
+# Debug files
+debug_*
+cfs_test_debug*
+*_data.txt
+*_debug*
+
+# OS generated files
+.DS_Store
+Thumbs.db

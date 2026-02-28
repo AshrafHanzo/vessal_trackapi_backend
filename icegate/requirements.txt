@@ -1,0 +1,9 @@
+playwright
+opencv-python-headless
+easyocr
+fastapi
+uvicorn
+beautifulsoup4
+lxml
+requests
+redis>=5.0.0

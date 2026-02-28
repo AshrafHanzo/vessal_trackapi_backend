@@ -1,0 +1,14 @@
+playwright>=1.40.0
+fastapi>=0.115.0
+uvicorn>=0.30.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+opencv-python-headless
+easyocr
+Pillow
+numpy
+onnxruntime
+requests
+rapidfuzz
+python-dateutil
+redis>=5.0.0
