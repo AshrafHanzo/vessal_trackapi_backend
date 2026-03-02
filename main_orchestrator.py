@@ -649,9 +649,14 @@ def main():
                 skipped_queues.append("ldb")
                 print(f"    ⏭ ldb — SKIP (disabled)")
 
-                # CFS — skip ALL 4 CFS queues only if ALL data is filled:
+                # CFS — PREREQUISITE: Inward must be filled first
+                # CFS websites only have data after Inward status
+                if not has_event("Inward"):
+                    skipped_queues.extend(["cfs", "dpw", "adani_katu", "adani_ennore"])
+                    print(f"    ⏭ cfs (all 4) — SKIP (Inward not filled yet)")
+                # CFS — skip ALL 4 CFS queues if ALL data is already filled:
                 # Port In + Port Out (At Port section) AND CFS In + CFS Out (Customs section)
-                if has_event("Port In") and has_event("Port Out") and has_event("CFS In") and has_event("CFS Out"):
+                elif has_event("Port In") and has_event("Port Out") and has_event("CFS In") and has_event("CFS Out"):
                     skipped_queues.extend(["cfs", "dpw", "adani_katu", "adani_ennore"])
                     print(f"    ⏭ cfs (all 4) — SKIP (Port+CFS all filled)")
                 else:
