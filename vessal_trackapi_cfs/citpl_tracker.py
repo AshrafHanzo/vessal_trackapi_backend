@@ -20,13 +20,27 @@ def track_citpl(container_number: str) -> dict:
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
+        # Set Chrome user agent — CITPL blocks "Safari Version 0" (default headless)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         page = context.new_page()
         
         try:
             # 1. Navigate to CITPL Tracking Page
             sys.stderr.write("DEBUG: Navigating to CITPL...\n")
             page.goto("https://cp.citpl.co.in/enquiry/ctrHist", timeout=60000)
+            
+            # 1b. Dismiss browser notification popup if it appears
+            # CITPL shows "Browser Notification" dialog with an OK button
+            try:
+                ok_btn = page.wait_for_selector("text=OK", timeout=5000)
+                if ok_btn:
+                    sys.stderr.write("DEBUG: Dismissing browser notification popup...\n")
+                    ok_btn.click()
+                    page.wait_for_timeout(1000)
+            except Exception:
+                sys.stderr.write("DEBUG: No browser popup found, continuing...\n")
             
             # 2. Wait for Input Field
             sys.stderr.write("DEBUG: Waiting for input field...\n")
