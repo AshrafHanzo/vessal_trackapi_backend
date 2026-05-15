@@ -179,7 +179,7 @@ def worker_process(worker_num):
         "status": "idle"
     }))
 
-    print(f"  [{worker_id}] Started")
+    print(f"  [{worker_id}] Started", flush=True)
 
     try:
         while True:
@@ -212,20 +212,20 @@ def worker_process(worker_num):
                         r.hdel(PROCESSING_KEY, container_no)
                         r.hdel(RETRY_KEY, container_no)
                         r.incr(COMPLETED_KEY)
-                        print(f"  [{worker_id}] [✓] {container_no} done (events={result.get('events_posted', 0)})")
+                        print(f"  [{worker_id}] [✓] {container_no} done (events={result.get('events_posted', 0)})", flush=True)
                     else:
                         r.hdel(PROCESSING_KEY, container_no)
                         retry_count = int(r.hget(RETRY_KEY, container_no) or 0) + 1
                         r.hset(RETRY_KEY, container_no, retry_count)
                         
                         if retry_count >= MAX_RETRIES:
-                            print(f"  [{worker_id}] [✗] {container_no} DROPPED after {retry_count} retries: {result.get('error')}")
+                            print(f"  [{worker_id}] [✗] {container_no} DROPPED after {retry_count} retries: {result.get('error')}", flush=True)
                             r.hdel(RETRY_KEY, container_no)
                             # Still update last_check_date so orchestrator knows we tried
                             shared_utils.post_event(container_no, "", "", "", is_status_changed=False)
                         else:
                             delay = RETRY_DELAYS[min(retry_count - 1, len(RETRY_DELAYS) - 1)]
-                            print(f"  [{worker_id}] [↻] {container_no} failed ({retry_count}/{MAX_RETRIES}): {result.get('error')}. Postponing {delay}s")
+                            print(f"  [{worker_id}] [↻] {container_no} failed ({retry_count}/{MAX_RETRIES}): {result.get('error')}. Postponing {delay}s", flush=True)
                             time.sleep(delay)
                             r.lpush(QUEUE_KEY, json.dumps(job_data))
 
@@ -234,17 +234,17 @@ def worker_process(worker_num):
                     retry_count = int(r.hget(RETRY_KEY, container_no) or 0) + 1
                     r.hset(RETRY_KEY, container_no, retry_count)
                     if retry_count >= MAX_RETRIES:
-                        print(f"  [{worker_id}] [✗] {container_no} DROPPED after {retry_count} crashes: {e}")
+                        print(f"  [{worker_id}] [✗] {container_no} DROPPED after {retry_count} crashes: {e}", flush=True)
                         r.hdel(RETRY_KEY, container_no)
                     else:
-                        print(f"  [{worker_id}] [Crashed] {container_no} ({retry_count}/{MAX_RETRIES}): {e}")
+                        print(f"  [{worker_id}] [Crashed] {container_no} ({retry_count}/{MAX_RETRIES}): {e}", flush=True)
                         time.sleep(10)
                         r.lpush(QUEUE_KEY, json.dumps(job_data))
 
                 time.sleep(SLEEP_BETWEEN_JOBS)
 
             except Exception as e:
-                print(f"  [{worker_id}] Worker loop error: {e}")
+                print(f"  [{worker_id}] Worker loop error: {e}", flush=True)
                 time.sleep(10)
 
     finally:
