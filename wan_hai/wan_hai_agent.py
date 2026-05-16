@@ -262,7 +262,7 @@ def supervisor():
     r.delete(WORKERS_KEY)
     workers = []
     
-    for i in range(MIN_WORKERS):
+    for i in range(MAX_WORKERS):
         p = multiprocessing.Process(target=worker_process, args=(i+1,), daemon=True)
         p.start()
         workers.append(p)
