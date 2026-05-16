@@ -193,6 +193,11 @@ def worker_process(worker_num):
                 job_data = json.loads(payload)
                 container_no = job_data.get("container_no", "UNKNOWN")
 
+                # DEDUPLICATION: If this container was already checked by another duplicate in the queue, skip it instantly.
+                if shared_utils.was_recently_checked(r, container_no):
+                    print(f"  [{worker_id}] [Skip] {container_no} already checked recently (duplicate).", flush=True)
+                    continue
+
                 r.hset(WORKERS_KEY, worker_id, json.dumps({
                     "status": "processing",
                     "container": container_no,
