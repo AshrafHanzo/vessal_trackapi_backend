@@ -236,22 +236,33 @@ def scrape_adani_ports(vessel_name):
                             if not v_name or len(v_name) < 3 or v_name.upper() == "VESSEL NAME":
                                 continue
                                 
-                            # the ATA/ETA column is split across two sub-columns visually (Date, Day/Time)
-                            # pdfplumber extracts them as adjacent indices.
                             eta_time = ""
                             if eta_idx + 1 < len(row) and row[eta_idx + 1]:
-                                raw_time = str(row[eta_idx + 1]).strip()
-                                # If it's just numbers like "900" or "0928", format as "09:00"
-                                if raw_time.isdigit() and 3 <= len(raw_time) <= 4:
-                                    raw_time = raw_time.zfill(4)
-                                    eta_time = f" {raw_time[:2]}:{raw_time[2:]}"
-                                else:
-                                    eta_time = " " + raw_time
-                                    
+                                eta_time = str(row[eta_idx + 1]).strip()
+                                
+                            import re
                             import datetime
                             current_year = str(datetime.datetime.now().year)
-                            if eta_date and current_year not in eta_date:
-                                eta_date = f"{eta_date} {current_year}"
+                            
+                            if eta_date:
+                                # Sometimes pdfplumber squashes date and time into one column like "12 Jul 900"
+                                match = re.match(r"^(\d{1,2}\s+[A-Za-z]{3})(?:\s+(\d{3,4}))?$", eta_date)
+                                if match:
+                                    eta_date = match.group(1)
+                                    squashed_time = match.group(2)
+                                    if squashed_time and not eta_time:
+                                        eta_time = squashed_time
+                                        
+                                if current_year not in eta_date:
+                                    eta_date = f"{eta_date} {current_year}"
+                                    
+                            # Format time if it's just digits like "900" or "0928"
+                            if eta_time:
+                                if eta_time.isdigit() and 3 <= len(eta_time) <= 4:
+                                    raw_time = eta_time.zfill(4)
+                                    eta_time = f" {raw_time[:2]}:{raw_time[2:]}"
+                                else:
+                                    eta_time = " " + eta_time
                                 
                             vessels_data.append({
                                 "vessel_name": v_name,
