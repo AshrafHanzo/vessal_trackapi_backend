@@ -240,18 +240,18 @@ def scrape_adani_ports(vessel_name):
                             if eta_idx + 1 < len(row) and row[eta_idx + 1]:
                                 eta_time = str(row[eta_idx + 1]).strip()
                                 
-                            import re
                             import datetime
                             current_year = str(datetime.datetime.now().year)
                             
                             if eta_date:
-                                # Sometimes pdfplumber squashes date and time into one column like "12 Jul 900"
-                                match = re.match(r"^(\d{1,2}\s+[A-Za-z]{3})(?:\s+(\d{3,4}))?$", eta_date)
-                                if match:
-                                    eta_date = match.group(1)
-                                    squashed_time = match.group(2)
-                                    if squashed_time and not eta_time:
-                                        eta_time = squashed_time
+                                # Split by space to check if time is squashed at the end
+                                parts = eta_date.split()
+                                if len(parts) >= 2:
+                                    last_part = parts[-1]
+                                    if last_part.isdigit() and len(last_part) >= 3:
+                                        if not eta_time:
+                                            eta_time = last_part
+                                        eta_date = " ".join(parts[:-1])
                                         
                                 if current_year not in eta_date:
                                     eta_date = f"{eta_date} {current_year}"
