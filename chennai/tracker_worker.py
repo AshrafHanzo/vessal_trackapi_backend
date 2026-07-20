@@ -136,7 +136,7 @@ def scrape_global_psa_chennai(vessel_name):
                 highest_score = final_score
                 best_match = info
                 
-        if best_match and highest_score >= 70:
+        if best_match and highest_score >= 82:
             # Prefer REVISED ETA if available
             eta = best_match["eta"]
             revised_eta = best_match["revised_eta"]
@@ -167,7 +167,7 @@ def scrape_global_psa_chennai(vessel_name):
 
 def scrape_adani_ports(vessel_name):
     print(f"[Worker] Scraping Adani Ports Mundra for '{vessel_name}'...", file=sys.stderr)
-    pdf_url = "https://www.adaniports.com/-/media/Project/Ports/PortsAndTerminals/Mundra-Documents/Berthing-Report/Latest-Berthing-Report-Mundra.pdf"
+    pdf_url = "https://www.adaniports.com/-/media/project/ports/portsandterminals/mundra-documents/berthing-report/latest_berthing-report_mundra.pdf"
     
     try:
         response = requests.get(pdf_url, verify=False, timeout=30)
@@ -186,31 +186,26 @@ def scrape_adani_ports(vessel_name):
                         if not table or len(table) < 2:
                             continue
                             
-                        # Look for the header row that indicates an "EXPECTED" vessels table
-                        # The user specified to skip tide/berth tables and look for "Sr No"
+                        # Look for the header row containing "VESSEL NAME"
                         header_row_idx = -1
-                        has_sr_no = False
+                        has_vessel_name = False
                         
                         for ri, row in enumerate(table):
                             if not row: continue
                             row_upper = [str(c).upper() for c in row if c]
                             
-                            if any("SR NO" in cell for cell in row_upper):
-                                has_sr_no = True
+                            if any("VESSEL NAME" in cell for cell in row_upper):
+                                has_vessel_name = True
                                 header_row_idx = ri
                                 break
                                 
-                        if not has_sr_no or header_row_idx == -1:
+                        if not has_vessel_name or header_row_idx == -1:
                             continue
                             
-                        headers_list = [str(c).strip().upper() for c in table[header_row_idx] if c]
-                        
                         # Find indices for Vessel Name and ATA/ETA Date
                         vessel_idx = -1
                         eta_idx = -1
                         
-                        # Since pdfplumber might not align columns perfectly if they are blank,
-                        # we iterate over the actual cells in the header row
                         raw_header_row = table[header_row_idx]
                         for ci, h in enumerate(raw_header_row):
                             if not h: continue
@@ -220,6 +215,14 @@ def scrape_adani_ports(vessel_name):
                             elif "ATA" in hu or "ETA" in hu:
                                 eta_idx = ci
                                 
+                        if eta_idx == -1:
+                            for ci, h in enumerate(raw_header_row):
+                                if not h: continue
+                                hu = str(h).upper()
+                                if "BERTHING" in hu or "SAILING" in hu or "ARR" in hu or "DEP" in hu:
+                                    eta_idx = ci
+                                    break
+                                    
                         if vessel_idx == -1 or eta_idx == -1:
                             continue
                             
@@ -233,16 +236,27 @@ def scrape_adani_ports(vessel_name):
                             if not v_name or len(v_name) < 3 or v_name.upper() == "VESSEL NAME":
                                 continue
                                 
-                            # the ATA/ETA column is split across two sub-columns visually (Date, Day)
+                            # the ATA/ETA column is split across two sub-columns visually (Date, Day/Time)
                             # pdfplumber extracts them as adjacent indices.
-                            eta_day = ""
+                            eta_time = ""
                             if eta_idx + 1 < len(row) and row[eta_idx + 1]:
-                                eta_day = str(row[eta_idx + 1]).strip()
+                                raw_time = str(row[eta_idx + 1]).strip()
+                                # If it's just numbers like "900" or "0928", format as "09:00"
+                                if raw_time.isdigit() and 3 <= len(raw_time) <= 4:
+                                    raw_time = raw_time.zfill(4)
+                                    eta_time = f" {raw_time[:2]}:{raw_time[2:]}"
+                                else:
+                                    eta_time = " " + raw_time
+                                    
+                            import datetime
+                            current_year = str(datetime.datetime.now().year)
+                            if eta_date and current_year not in eta_date:
+                                eta_date = f"{eta_date} {current_year}"
                                 
                             vessels_data.append({
                                 "vessel_name": v_name,
                                 "eta_date": eta_date,
-                                "eta_day": eta_day
+                                "eta_day": eta_time.strip()
                             })
                             
         except Exception as e:
@@ -264,7 +278,7 @@ def scrape_adani_ports(vessel_name):
                 highest_score = final_score
                 best_match = info
                 
-        if best_match and highest_score >= 70:
+        if best_match and highest_score >= 82:
             return {
                 "status": "success",
                 "source": "Adani Ports Mundra (Fallback 2)",
@@ -277,14 +291,205 @@ def scrape_adani_ports(vessel_name):
         else:
             return {
                 "status": "not_found",
-                "source": "All Sources Failed (Chennai, PSA, Adani)",
-                "message": f"No vessel found matching '{vessel_name}' with score >= 70 across all 3 sources.",
+                "source": "All Sources Failed (Chennai, Kattupalli, Ennore, PSA, Mundra)",
+                "message": f"No vessel found matching '{vessel_name}' with score >= 82 across all sources.",
                 "best_match_found": best_match["vessel_name"] if best_match else None,
                 "best_score": round(highest_score, 2) if best_match else 0
             }
             
     except Exception as e:
         return {"status": "error", "source": "Adani Ports Mundra", "message": f"Adani Ports Scraper failed: {e}"}
+
+def scrape_kattupalli_port(vessel_name):
+    print(f"[Worker] Scraping Kattupalli Port PDF for '{vessel_name}'...", file=sys.stderr)
+    pdf_url = "https://www.adaniports.com/-/media/Project/Ports/PortsAndTerminals/Kattupalli-Port-Documents/Vessel-Schedule/ADANI-BERTHING-REPORT.pdf"
+    
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        }
+        response = requests.get(pdf_url, headers=headers, verify=False, timeout=30)
+        response.raise_for_status()
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(response.content)
+            tmp_path = tmp.name
+            
+        vessels = []
+        try:
+            with pdfplumber.open(tmp_path) as pdf:
+                for page in pdf.pages:
+                    tables = page.extract_tables()
+                    for table in tables:
+                        if not table or len(table) < 2:
+                            continue
+                        
+                        for r_idx, row in enumerate(table):
+                            if not row:
+                                continue
+                            row_str = [str(c).upper() for c in row if c]
+                            
+                            if any("VESSEL NAME" in cell for cell in row_str) and any("ATA / ETA" in cell for cell in row_str):
+                                vessel_idx = -1
+                                date_idx = -1
+                                time_idx = -1
+                                for ci, cell in enumerate(row):
+                                    if not cell: continue
+                                    cu = str(cell).upper().strip()
+                                    if "VESSEL NAME" in cu:
+                                        vessel_idx = ci
+                                    elif "ATA / ETA" in cu:
+                                        date_idx = ci
+                                    elif cu == "ETA":
+                                        time_idx = ci
+                                
+                                if vessel_idx != -1 and date_idx != -1:
+                                    for data_ri in range(r_idx + 1, len(table)):
+                                        d_row = table[data_ri]
+                                        if not d_row or len(d_row) <= max(vessel_idx, date_idx):
+                                            continue
+                                        v_name = d_row[vessel_idx]
+                                        v_date = d_row[date_idx]
+                                        if not v_name or str(v_name).strip() == "" or str(v_name).upper() in ["VESSEL NAME", "VACANT", "NA"]:
+                                            continue
+                                        
+                                        v_time = ""
+                                        if time_idx != -1 and time_idx < len(d_row) and d_row[time_idx]:
+                                            v_time = " " + str(d_row[time_idx]).strip()
+                                        
+                                        eta_val = str(v_date).strip() + v_time
+                                        vessels.append({
+                                            "vessel_name": str(v_name).strip(),
+                                            "eta": eta_val
+                                        })
+        finally:
+            os.remove(tmp_path)
+            
+        print(f"[Worker] Found {len(vessels)} vessels in Kattupalli Port tables.", file=sys.stderr)
+        
+        best_match = None
+        highest_score = 0
+        for v in vessels:
+            score = fuzz.ratio(vessel_name.upper(), v["vessel_name"].upper())
+            p_score = fuzz.partial_ratio(vessel_name.upper(), v["vessel_name"].upper())
+            final_score = max(score, p_score)
+            if final_score > highest_score:
+                highest_score = final_score
+                best_match = v
+                
+        if best_match and highest_score >= 82:
+            return {
+                "status": "success",
+                "source": "Kattupalli Port PDF",
+                "search_vessel_name": vessel_name,
+                "matched_vessel_name": best_match["vessel_name"],
+                "eta_date": best_match["eta"],
+                "match_score": round(highest_score, 2)
+            }
+        else:
+            print(f"[Worker] Kattupalli match failed / score too low ({round(highest_score, 2) if best_match else 0}). Initiating Ennore Fallback...", file=sys.stderr)
+            return scrape_ennore_port(vessel_name)
+            
+    except Exception as e:
+        print(f"[Worker] Kattupalli Scraper failed: {e}. Initiating Ennore Fallback...", file=sys.stderr)
+        return scrape_ennore_port(vessel_name)
+
+def scrape_ennore_port(vessel_name):
+    print(f"[Worker] Scraping Ennore Terminal PDF for '{vessel_name}'...", file=sys.stderr)
+    pdf_url = "https://www.adaniports.com/-/media/Project/Ports/PortsAndTerminals/Ennore-Terminal/Vessel-Schedule/AECTPL-BERTHING-REPORT.pdf"
+    
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        }
+        response = requests.get(pdf_url, headers=headers, verify=False, timeout=30)
+        response.raise_for_status()
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(response.content)
+            tmp_path = tmp.name
+            
+        vessels = []
+        try:
+            with pdfplumber.open(tmp_path) as pdf:
+                for page in pdf.pages:
+                    tables = page.extract_tables()
+                    for table in tables:
+                        if not table or len(table) < 2:
+                            continue
+                        
+                        for r_idx, row in enumerate(table):
+                            if not row:
+                                continue
+                            row_str = [str(c).upper() for c in row if c]
+                            
+                            if any("VESSEL NAME" in cell for cell in row_str) and any("ATA / ETA" in cell for cell in row_str):
+                                vessel_idx = -1
+                                date_idx = -1
+                                time_idx = -1
+                                for ci, cell in enumerate(row):
+                                    if not cell: continue
+                                    cu = str(cell).upper().strip()
+                                    if "VESSEL NAME" in cu:
+                                        vessel_idx = ci
+                                    elif "ATA / ETA" in cu:
+                                        date_idx = ci
+                                    elif cu == "ETA":
+                                        time_idx = ci
+                                
+                                if vessel_idx != -1 and date_idx != -1:
+                                    for data_ri in range(r_idx + 1, len(table)):
+                                        d_row = table[data_ri]
+                                        if not d_row or len(d_row) <= max(vessel_idx, date_idx):
+                                            continue
+                                        v_name = d_row[vessel_idx]
+                                        v_date = d_row[date_idx]
+                                        if not v_name or str(v_name).strip() == "" or str(v_name).upper() in ["VESSEL NAME", "VACANT", "NA"]:
+                                            continue
+                                        
+                                        v_time = ""
+                                        for test_ci in range(date_idx + 1, min(date_idx + 4, len(d_row))):
+                                            cell_val = str(d_row[test_ci] or "").strip()
+                                            if re.match(r'^\d{2}:\d{2}$', cell_val):
+                                                v_time = " " + cell_val
+                                                break
+                                                
+                                        eta_val = str(v_date).strip() + v_time
+                                        vessels.append({
+                                            "vessel_name": str(v_name).strip(),
+                                            "eta": eta_val
+                                        })
+        finally:
+            os.remove(tmp_path)
+            
+        print(f"[Worker] Found {len(vessels)} vessels in Ennore Terminal tables.", file=sys.stderr)
+        
+        best_match = None
+        highest_score = 0
+        for v in vessels:
+            score = fuzz.ratio(vessel_name.upper(), v["vessel_name"].upper())
+            p_score = fuzz.partial_ratio(vessel_name.upper(), v["vessel_name"].upper())
+            final_score = max(score, p_score)
+            if final_score > highest_score:
+                highest_score = final_score
+                best_match = v
+                
+        if best_match and highest_score >= 82:
+            return {
+                "status": "success",
+                "source": "Ennore Terminal PDF",
+                "search_vessel_name": vessel_name,
+                "matched_vessel_name": best_match["vessel_name"],
+                "eta_date": best_match["eta"],
+                "match_score": round(highest_score, 2)
+            }
+        else:
+            print(f"[Worker] Ennore match failed / score too low ({round(highest_score, 2) if best_match else 0}). Initiating Global PSA Fallback...", file=sys.stderr)
+            return scrape_global_psa_chennai(vessel_name)
+            
+    except Exception as e:
+        print(f"[Worker] Ennore Scraper failed: {e}. Initiating Global PSA Fallback...", file=sys.stderr)
+        return scrape_global_psa_chennai(vessel_name)
 
 def run_chennai_tracker(vessel_name):
     # PDF URL for ETA
@@ -376,8 +581,8 @@ def run_chennai_tracker(vessel_name):
             highest_score = final_score
             best_match = info
     
-    # User requested match threshold is 70%
-    if best_match and highest_score >= 70:
+    # Match threshold is 82% to prevent false positives on common words
+    if best_match and highest_score >= 82:
         result = {
             "status": "success",
             "source": "Chennai Port PDF",
@@ -387,8 +592,8 @@ def run_chennai_tracker(vessel_name):
             "match_score": round(highest_score, 2)
         }
     else:
-        print(f"[Worker] Primary PDF match failed / score too low ({round(highest_score, 2) if best_match else 0}). Initiating Global PSA Fallback...", file=sys.stderr)
-        result = scrape_global_psa_chennai(vessel_name)
+        print(f"[Worker] Primary PDF match failed / score too low ({round(highest_score, 2) if best_match else 0}). Initiating Kattupalli Fallback...", file=sys.stderr)
+        result = scrape_kattupalli_port(vessel_name)
         
     print(json.dumps(result, indent=2))
 
