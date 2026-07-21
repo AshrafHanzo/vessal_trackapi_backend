@@ -11,7 +11,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ==========================================
 # CONFIGURATION
 # ==========================================
-API_BASE_URL = "https://trackcontainer.in/api/external"
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://trackcontainer.in/api/external")
 
 # Redis Configuration
 REDIS_HOST = os.environ.get("REDIS_HOST", "api.trackcontainer.in")
@@ -23,6 +23,7 @@ IS_WINDOWS = sys.platform == 'win32'
 WINDOWS_MANAGED_SERVICES = ["hapag", "cosco", "rcl", "hmm"]
 
 DEDUP_TTL = 1800  # 30 minutes
+LAST_CHECK_TTL = 14400  # 4 hours in seconds — cooldown between checks for same container
 
 # Redis Queue Keys
 QUEUE_KEYS = {
@@ -82,13 +83,49 @@ def get_redis_client():
         print(f"  [ERROR] Redis connection failed: {e}")
         return None
 
+def was_recently_checked(r, container_no):
+    """
+    Check if a container was processed within the last 4 hours.
+    Uses Redis key tc:last_checked:{container_no} with TTL-based auto-expiry.
+    Returns True if recently checked (should SKIP), False if due for re-check.
+    """
+    if not r or not container_no:
+        return False
+    try:
+        return r.exists(f"tc:last_checked:{container_no}") > 0
+    except Exception:
+        return False
+
+def mark_checked(r, container_no):
+    """
+    Mark a container as recently checked. Sets Redis key with 4-hour TTL.
+    After 4 hours, the key auto-expires and the container becomes eligible again.
+    """
+    if not r or not container_no:
+        return
+    try:
+        r.setex(f"tc:last_checked:{container_no}", LAST_CHECK_TTL, datetime.now().isoformat())
+    except Exception as e:
+        print(f"  [WARN] Could not mark {container_no} as checked: {e}")
+
 def fetch_active_containers():
     """Fetch list of all active containers from the API."""
-    print("Fetching active containers...")
+    r = None
+    try:
+        r = get_redis_client()
+        if r:
+            cached = r.get("tc:cache:active_containers")
+            if cached:
+                print("  -> Returning cached active containers from Redis.")
+                return json.loads(cached)
+    except Exception as e:
+        print(f"  [WARN] Redis cache read failed: {e}")
+
+    print("Fetching active containers from API...")
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            response = requests.get(f"{API_BASE_URL}/containers/active", verify=False, timeout=15)
+            response = requests.get(f"{API_BASE_URL}/containers/active", verify=False, timeout=60)
             response.raise_for_status()
             data = response.json()
             
@@ -112,7 +149,15 @@ def fetch_active_containers():
                         
                     candidates.append(container)
             
-            print(f"  -> Found {len(candidates)} active containers.")
+            print(f"  -> Found {len(candidates)} active containers from API.")
+            
+            # Cache the result in Redis for 120 seconds (2 minutes)
+            try:
+                if r:
+                    r.setex("tc:cache:active_containers", 120, json.dumps(candidates))
+            except Exception as ce:
+                print(f"  [WARN] Failed to write cache to Redis: {ce}")
+                
             return candidates
         except Exception as e:
             print(f"  [RETRY {attempt+1}/{max_retries}] Error fetching candidates: {e}")
@@ -123,13 +168,24 @@ def fetch_active_containers():
     return []
 
 def fetch_job_details_map():
-    print("Fetching enriched job details map...")
+    r = None
+    try:
+        r = get_redis_client()
+        if r:
+            cached = r.get("tc:cache:job_details_map")
+            if cached:
+                print("  -> Returning cached job details map from Redis.")
+                return json.loads(cached)
+    except Exception as e:
+        print(f"  [WARN] Redis cache read failed: {e}")
+
+    print("Fetching enriched job details map from API...")
     job_map = {}
     max_retries = 3
     for attempt in range(max_retries):
         try:
             # Use verify=False to bypass Nginx SSL handshake bugs
-            response = requests.get(f"{API_BASE_URL}/get-job-details", verify=False, timeout=15)
+            response = requests.get(f"{API_BASE_URL}/get-job-details", verify=False, timeout=60)
             response.raise_for_status()
             data = response.json()
             if data.get("status") == "success":
@@ -137,7 +193,15 @@ def fetch_job_details_map():
                     cnt_no = item.get("container_no")
                     if cnt_no:
                         job_map[cnt_no] = item
-            print(f"  -> Loaded {len(job_map)} job detail records.")
+            print(f"  -> Loaded {len(job_map)} job detail records from API.")
+            
+            # Cache the result in Redis for 120 seconds (2 minutes)
+            try:
+                if r:
+                    r.setex("tc:cache:job_details_map", 120, json.dumps(job_map))
+            except Exception as ce:
+                print(f"  [WARN] Failed to write cache to Redis: {ce}")
+                
             return job_map
         except Exception as e:
             print(f"  [RETRY {attempt+1}/{max_retries}] Error fetching job details: {e}")
@@ -196,6 +260,7 @@ def post_event(container_no, status, date, value, is_status_changed=True, shipme
     """
     Centralized function to post a shipment timeline event to the Portal API.
     Uses an unambiguous date format (%d %b %Y) to prevent month/day swapping in the portal.
+    Also marks the container as recently checked in Redis (4-hour cooldown).
     """
     payload = {
         "container_no": container_no,
@@ -215,6 +280,13 @@ def post_event(container_no, status, date, value, is_status_changed=True, shipme
             verify=False
         )
         if response.status_code in [200, 201]:
+            # Mark as checked in Redis so orchestrator won't re-queue for 4 hours
+            try:
+                r = get_redis_client()
+                if r:
+                    mark_checked(r, container_no)
+            except Exception:
+                pass
             return True
         else:
             print(f"      [Portal] Post failed ({response.status_code}): {response.text[:200]}")
@@ -222,4 +294,149 @@ def post_event(container_no, status, date, value, is_status_changed=True, shipme
     except Exception as e:
         print(f"      [Portal] Post error: {e}")
         return False
+
+
+def normalize_date(date_str):
+    """Normalize date to YYYY-MM-DD for accurate comparison."""
+    if not date_str:
+        return None
+    try:
+        # Strip string and remove any trailing time or whitespace
+        date_clean = str(date_str).strip()
+        
+        # If it has a space, split and filter out any part containing ':' (time part)
+        if " " in date_clean:
+            parts = date_clean.split(" ")
+            clean_parts = []
+            for p in parts:
+                if ":" in p:
+                    break
+                clean_parts.append(p)
+            date_clean = " ".join(clean_parts).strip()
+            
+        if "T" in date_clean:
+            date_clean = date_clean.split("T")[0]
+            
+        # Try various common formats
+        for fmt in ["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%d %b %Y", "%d %B %Y"]:
+            try:
+                return datetime.strptime(date_clean, fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return str(date_str).strip()
+
+
+def are_dates_equal(date1, date2):
+    """Compare two date strings in a normalized format."""
+    if not date1 and not date2:
+        return True
+    if not date1 or not date2:
+        return False
+    return normalize_date(date1) == normalize_date(date2)
+
+
+def run_agent_subprocess(python_exe, script_path, container_no, timeout_seconds, cwd):
+    """
+    Runs an agent tracker worker script as a subprocess.
+    Avoids the Windows pipe deadlock bug by redirecting stdout/stderr to files.
+    If a timeout occurs, it recursively kills the process tree using taskkill (on Windows)
+    to ensure no zombie Chrome/Chromedriver processes are left.
+    """
+    import tempfile
+    import sys
+    import subprocess
+    import uuid
+
+    # Use a local temp logs directory instead of the system TEMP directory to bypass Windows Server Temp virtualization issues.
+    local_temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_logs")
+    if not os.path.exists(local_temp_dir):
+        try:
+            os.makedirs(local_temp_dir, exist_ok=True)
+        except Exception:
+            pass
+
+    # Fallback to tempfile if local directory creation fails
+    if os.path.exists(local_temp_dir):
+        unique_dir = os.path.join(local_temp_dir, f"tmp_{uuid.uuid4().hex}")
+        try:
+            os.makedirs(unique_dir, exist_ok=True)
+            tmpdir = unique_dir
+        except Exception:
+            tmpdir = tempfile.mkdtemp()
+    else:
+        tmpdir = tempfile.mkdtemp()
+
+    stdout_path = os.path.join(tmpdir, "stdout.log")
+    stderr_path = os.path.join(tmpdir, "stderr.log")
+    
+    try:
+        with open(stdout_path, "w", encoding="utf-8", errors="ignore") as f_out, \
+             open(stderr_path, "w", encoding="utf-8", errors="ignore") as f_err:
+            
+            proc = subprocess.Popen(
+                [python_exe, script_path, container_no],
+                stdout=f_out,
+                stderr=f_err,
+                cwd=cwd
+            )
+            
+            try:
+                proc.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                print(f"  [SUBPROCESS] Timeout reached ({timeout_seconds}s) for PID {proc.pid}. Terminating process tree...", flush=True)
+                
+                if sys.platform == "win32":
+                    subprocess.run(["taskkill", "/F", "/PID", str(proc.pid), "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
+                
+                raise subprocess.TimeoutExpired(proc.args, timeout_seconds)
+                
+        stdout_val = ""
+        stderr_val = ""
+        if os.path.exists(stdout_path):
+            with open(stdout_path, "r", encoding="utf-8", errors="ignore") as f:
+                stdout_val = f.read()
+        if os.path.exists(stderr_path):
+            with open(stderr_path, "r", encoding="utf-8", errors="ignore") as f:
+                stderr_val = f.read()
+                
+        class CompletedProcessShim:
+            def __init__(self, returncode, stdout, stderr):
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+                
+        return CompletedProcessShim(proc.returncode, stdout_val, stderr_val)
+
+    finally:
+        # Clean up files and directory
+        try:
+            if os.path.exists(stdout_path):
+                os.remove(stdout_path)
+        except Exception:
+            pass
+        try:
+            if os.path.exists(stderr_path):
+                os.remove(stderr_path)
+        except Exception:
+            pass
+        try:
+            if os.path.exists(tmpdir):
+                os.rmdir(tmpdir)
+        except Exception:
+            pass
+
+
+
 
